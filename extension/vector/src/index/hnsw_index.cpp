@@ -22,9 +22,23 @@ void HNSWIndexPartitionerSharedState::setTables(NodeTable* nodeTable, RelTable* 
     upperPartitionerSharedState->relTable = relTable;
 }
 
-InMemHNSWLayer::InMemHNSWLayer(MemoryManager* mm, InMemHNSWLayerInfo info)
+InMemHNSWLayer::InMemHNSWLayer(MemoryManager* mm, InMemHNSWLayerInfo info, InMemHNSWGraphType type)
     : entryPoint{common::INVALID_OFFSET}, info{info} {
-    graph = std::make_unique<InMemHNSWGraph>(mm, info.numNodes, info.degreeThresholdToShrink);
+    switch (type) {
+    case InMemHNSWGraphType::DENSE: {
+        graph =
+            std::make_unique<DenseInMemHNSWGraph>(mm, info.numNodes, info.degreeThresholdToShrink);
+        break;
+    }
+    case InMemHNSWGraphType::SPARSE: {
+        graph =
+            std::make_unique<SparseInMemHNSWGraph>(mm, info.numNodes, info.degreeThresholdToShrink);
+        break;
+    }
+    default: {
+        KU_UNREACHABLE;
+    }
+    }
 }
 
 void InMemHNSWLayer::insert(common::offset_t offset, common::offset_t entryPoint_,
@@ -84,7 +98,7 @@ void InMemHNSWLayer::insertRel(common::offset_t srcNode, common::offset_t dstNod
         shrinkForNode(info, graph.get(), srcNode, currentLen);
     } else {
         KU_ASSERT(srcNode < info.numNodes);
-        graph->setDstNode(srcNode * info.degreeThresholdToShrink + currentLen, dstNode);
+        graph->setDstNode(srcNode, currentLen, dstNode);
     }
 }
 
@@ -183,8 +197,7 @@ void InMemHNSWLayer::shrinkForNode(const InMemHNSWLayerInfo& info, InMemHNSWGrap
             }
         }
         if (keepNbr) {
-            const auto startCSROffset = nodeOffset * info.degreeThresholdToShrink;
-            graph->setDstNode(startCSROffset + newSize++, nbrs[i].nodeOffset);
+            graph->setDstNode(nodeOffset, newSize++, nbrs[i].nodeOffset);
         }
         if (newSize >= info.maxDegree) {
             break;
@@ -243,11 +256,13 @@ InMemHNSWIndex::InMemHNSWIndex(const main::ClientContext* context, NodeTable& ta
     lowerLayer = std::make_unique<InMemHNSWLayer>(context->getMemoryManager(),
         InMemHNSWLayerInfo{numNodes, common::ku_dynamic_cast<InMemEmbeddings*>(embeddings.get()),
             this->config.metric, getDegreeThresholdToShrink(this->config.ml), this->config.ml,
-            this->config.alpha, this->config.efc});
+            this->config.alpha, this->config.efc},
+        InMemHNSWLayer::InMemHNSWGraphType::DENSE);
     upperLayer = std::make_unique<InMemHNSWLayer>(context->getMemoryManager(),
         InMemHNSWLayerInfo{numNodes, common::ku_dynamic_cast<InMemEmbeddings*>(embeddings.get()),
             this->config.metric, getDegreeThresholdToShrink(this->config.mu), this->config.mu,
-            this->config.alpha, this->config.efc});
+            this->config.alpha, this->config.efc},
+        InMemHNSWLayer::InMemHNSWGraphType::SPARSE);
 }
 
 bool InMemHNSWIndex::insert(common::offset_t offset, VisitedState& upperVisited,

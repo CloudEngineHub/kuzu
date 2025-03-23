@@ -106,7 +106,10 @@ struct InMemHNSWLayerInfo {
 
 class InMemHNSWLayer {
 public:
-    explicit InMemHNSWLayer(storage::MemoryManager* mm, InMemHNSWLayerInfo info);
+    enum class InMemHNSWGraphType { DENSE, SPARSE };
+
+    explicit InMemHNSWLayer(storage::MemoryManager* mm, InMemHNSWLayerInfo info,
+        InMemHNSWGraphType type);
     common::offset_t compareAndSwapEntryPoint(common::offset_t offset) {
         common::offset_t oldOffset = common::INVALID_OFFSET;
         entryPoint.compare_exchange_strong(oldOffset, offset);

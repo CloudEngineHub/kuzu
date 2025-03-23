@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cmath>
+#include <shared_mutex>
 
 #include "index/hnsw_config.h"
 #include "processor/operator/partitioner.h"
 #include "storage/buffer_manager/memory_manager.h"
 #include "storage/local_cached_column.h"
-#include "storage/store/column_chunk_data.h"
 
 namespace kuzu {
 namespace storage {
@@ -81,27 +81,21 @@ struct HNSWGraphInfo {
 
 class InMemHNSWGraph {
 public:
-    using shrink_func_t =
-        std::function<void(transaction::Transaction*, common::offset_t, common::length_t)>;
+    using atomic_offset_t = std::atomic<common::offset_t>;
+    using atomic_offset_vec_t = std::vector<std::atomic<common::offset_t>>;
 
     InMemHNSWGraph(storage::MemoryManager* mm, common::offset_t numNodes,
         common::length_t maxDegree)
         : numNodes{numNodes}, maxDegree{maxDegree} {
         csrLengthBuffer = mm->allocateBuffer(true, numNodes * sizeof(std::atomic<uint16_t>));
         csrLengths = reinterpret_cast<std::atomic<uint16_t>*>(csrLengthBuffer->getData());
-        dstNodesBuffer =
-            mm->allocateBuffer(false, numNodes * maxDegree * sizeof(std::atomic<common::offset_t>));
-        dstNodes = reinterpret_cast<std::atomic<common::offset_t>*>(dstNodesBuffer->getData());
-        resetCSRLengthAndDstNodes();
+        resetCSRLengths();
     }
-
-    std::span<std::atomic<common::offset_t>> getNeighbors(common::offset_t nodeOffset) const {
-        const auto numNbrs = getCSRLength(nodeOffset);
-        return {&dstNodes[nodeOffset * maxDegree], numNbrs};
-    }
+    virtual ~InMemHNSWGraph();
 
     common::length_t getMaxDegree() const { return maxDegree; }
 
+    virtual std::span<atomic_offset_t> getNeighbors(common::offset_t nodeOffset) = 0;
     uint16_t getCSRLength(common::offset_t nodeOffset) const {
         return csrLengths[nodeOffset].load(std::memory_order_relaxed);
     }
@@ -113,33 +107,85 @@ public:
     uint16_t incrementCSRLength(common::offset_t nodeOffset) {
         return csrLengths[nodeOffset].fetch_add(1, std::memory_order_relaxed);
     }
-    // NOLINTNEXTLINE(readability-make-member-function-const): Semantically non-const function.
-    void setDstNode(common::offset_t csrOffset, common::offset_t dstNode) {
-        dstNodes[csrOffset].store(dstNode, std::memory_order_relaxed);
-    }
-
+    virtual void setDstNode(common::offset_t nodeOffset, common::offset_t offsetInCSRList,
+        common::offset_t dstNode) = 0;
+    virtual common::offset_t getDstNode(common::offset_t nodeOffset,
+        common::offset_t offsetInCSRList) = 0;
     void finalize(storage::MemoryManager& mm, common::node_group_idx_t nodeGroupIdx,
         const processor::PartitionerSharedState& partitionerSharedState);
 
-private:
-    void resetCSRLengthAndDstNodes();
+protected:
+    void resetCSRLengths() {
+        for (common::offset_t i = 0; i < numNodes; i++) {
+            setCSRLength(i, 0);
+        }
+    }
 
+private:
     void finalizeNodeGroup(storage::MemoryManager& mm, common::node_group_idx_t nodeGroupIdx,
         uint64_t numRels, common::table_id_t srcNodeTableID, common::table_id_t dstNodeTableID,
-        common::table_id_t relTableID, storage::InMemChunkedNodeGroupCollection& partition) const;
+        common::table_id_t relTableID, storage::InMemChunkedNodeGroupCollection& partition);
 
-    common::offset_t getDstNode(common::offset_t csrOffset) const {
+protected:
+    common::offset_t numNodes;
+    // Max allowed degree of a node in the graph before shrinking.
+    common::length_t maxDegree;
+    std::unique_ptr<storage::MemoryBuffer> csrLengthBuffer;
+    std::atomic<uint16_t>* csrLengths;
+};
+
+class SparseInMemHNSWGraph final : public InMemHNSWGraph {
+public:
+    SparseInMemHNSWGraph(storage::MemoryManager* mm, common::offset_t numNodes,
+        common::length_t maxDegree)
+        : InMemHNSWGraph{mm, numNodes, maxDegree}, dstNodes{numNodes}, dstNodesMutex{numNodes} {}
+
+    std::span<std::atomic<common::offset_t>> getNeighbors(common::offset_t nodeOffset) override;
+    void setDstNode(common::offset_t nodeOffset, common::offset_t offsetInCSRList,
+        common::offset_t dstNode) override;
+    common::offset_t getDstNode(common::offset_t nodeOffset,
+        common::offset_t offsetInCSRList) override;
+
+private:
+    std::vector<std::unique_ptr<atomic_offset_vec_t>> dstNodes;
+    std::vector<std::shared_mutex> dstNodesMutex;
+};
+
+class DenseInMemHNSWGraph final : public InMemHNSWGraph {
+public:
+    DenseInMemHNSWGraph(storage::MemoryManager* mm, common::offset_t numNodes,
+        common::length_t maxDegree)
+        : InMemHNSWGraph{mm, numNodes, maxDegree} {
+        dstNodesBuffer =
+            mm->allocateBuffer(false, numNodes * maxDegree * sizeof(std::atomic<common::offset_t>));
+        dstNodes = reinterpret_cast<std::atomic<common::offset_t>*>(dstNodesBuffer->getData());
+        resetDstNodes();
+    }
+
+    std::span<std::atomic<common::offset_t>> getNeighbors(common::offset_t nodeOffset) override {
+        const auto numNbrs = getCSRLength(nodeOffset);
+        return {&dstNodes[nodeOffset * maxDegree], numNbrs};
+    }
+
+    // NOLINTNEXTLINE(readability-make-member-function-const): Semantically non-const function.
+    void setDstNode(common::offset_t nodeOffset, common::offset_t offsetInCSRList,
+        common::offset_t dstNode) override {
+        const auto csrOffset = nodeOffset * maxDegree + offsetInCSRList;
+        dstNodes[csrOffset].store(dstNode, std::memory_order_relaxed);
+    }
+
+private:
+    void resetDstNodes();
+
+    common::offset_t getDstNode(common::offset_t nodeOffset,
+        common::offset_t offsetInCSRList) override {
+        const auto csrOffset = nodeOffset * maxDegree + offsetInCSRList;
         return dstNodes[csrOffset].load(std::memory_order_relaxed);
     }
 
 private:
-    common::offset_t numNodes;
-    std::unique_ptr<storage::MemoryBuffer> csrLengthBuffer;
     std::unique_ptr<storage::MemoryBuffer> dstNodesBuffer;
-    std::atomic<uint16_t>* csrLengths;
-    std::atomic<common::offset_t>* dstNodes;
-    // Max allowed degree of a node in the graph before shrinking.
-    common::length_t maxDegree;
+    atomic_offset_t* dstNodes;
 };
 
 } // namespace vector_extension
