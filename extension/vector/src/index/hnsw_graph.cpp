@@ -79,11 +79,11 @@ InMemHNSWGraph::~InMemHNSWGraph() = default;
 std::span<InMemHNSWGraph::atomic_offset_t> SparseInMemHNSWGraph::getNeighbors(
     common::offset_t nodeOffset) {
     std::shared_lock lock(dstNodesMutex[nodeOffset]);
+    KU_ASSERT(nodeOffset < dstNodes.size());
     if (dstNodes[nodeOffset]) {
         return {dstNodes[nodeOffset]->data(), getCSRLength(nodeOffset)};
     }
-    static std::vector<std::atomic<common::offset_t>> emptyNeighbors;
-    return std::span(emptyNeighbors);
+    return std::span<atomic_offset_t>();
 }
 
 void SparseInMemHNSWGraph::setDstNode(common::offset_t nodeOffset, common::offset_t offsetInCSRList,
