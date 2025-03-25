@@ -91,19 +91,22 @@ void SparseInMemHNSWGraph::setDstNode(common::offset_t nodeOffset, common::offse
     std::unique_lock lock(dstNodesMutex[dstNode]);
     if (!dstNodes[nodeOffset]) {
         dstNodes[nodeOffset] = std::make_unique<atomic_offset_vec_t>(maxDegree);
+        auto& vec = *dstNodes[nodeOffset];
         for (auto i = 0u; i < maxDegree; i++) {
-            dstNodes[nodeOffset]->at(i).store(common::INVALID_OFFSET, std::memory_order_relaxed);
+            vec[i].store(common::INVALID_OFFSET, std::memory_order_relaxed);
         }
     }
     KU_ASSERT(offsetInCSRList < maxDegree);
-    dstNodes[nodeOffset]->data()[offsetInCSRList].store(dstNode, std::memory_order_relaxed);
+    auto& vec = *dstNodes[nodeOffset];
+    vec[offsetInCSRList].store(dstNode, std::memory_order_relaxed);
 }
 
 common::offset_t SparseInMemHNSWGraph::getDstNode(common::offset_t nodeOffset,
     common::offset_t offsetInCSRList) {
     std::shared_lock lock(dstNodesMutex[nodeOffset]);
     if (dstNodes[nodeOffset]) {
-        return dstNodes[nodeOffset]->data()[offsetInCSRList].load(std::memory_order_relaxed);
+        const auto& vec = *dstNodes[nodeOffset];
+        return vec[offsetInCSRList].load(std::memory_order_relaxed);
     }
     return common::INVALID_OFFSET;
 }
