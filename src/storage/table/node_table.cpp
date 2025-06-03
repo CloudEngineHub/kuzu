@@ -462,9 +462,12 @@ std::pair<offset_t, offset_t> NodeTable::appendToLastNodeGroup(MemoryManager& mm
         chunkedGroup);
 }
 
-DataChunk NodeTable::constructDataChunkForPKColumn() const {
+DataChunk NodeTable::constructDataChunkForColumns(const std::vector<column_id_t>& columnIDs) const {
     std::vector<LogicalType> types;
-    types.push_back(columns[pkColumnID]->getDataType().copy());
+    for (const auto& columnID : columnIDs) {
+        KU_ASSERT(columnID < columns.size());
+        types.push_back(columns[columnID]->getDataType().copy());
+    }
     return constructDataChunk(memoryManager, std::move(types));
 }
 
@@ -622,7 +625,7 @@ bool NodeTable::lookupPK(const Transaction* transaction, ValueVector* keyVector,
 
 void NodeTable::scanIndexColumns(Transaction* transaction, IndexScanHelper& scanHelper,
     const NodeGroupCollection& nodeGroups_) const {
-    auto dataChunk = constructDataChunkForPKColumn();
+    auto dataChunk = constructDataChunkForColumns(scanHelper.index->getIndexInfo().columnIDs);
     const auto scanState = scanHelper.initScanState(transaction, dataChunk);
 
     const auto numNodeGroups = nodeGroups_.getNumNodeGroups();
