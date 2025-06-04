@@ -98,6 +98,7 @@ struct UncommittedIndexInserter final : IndexScanHelper {
     row_idx_t startNodeOffset;
     ValueVector nodeIDVector;
     visible_func isVisible;
+    std::unique_ptr<Index::InsertState> insertState;
 };
 
 struct RollbackPKDeleter final : IndexScanHelper {
@@ -134,7 +135,9 @@ bool UncommittedIndexInserter::processScanOutput(Transaction* transaction, Memor
     for (auto i = 0u; i < scanResult.numRows; i++) {
         nodeIDVector.setValue(i, nodeID_t{startNodeOffset + i, table->getTableID()});
     }
-    const auto insertState = index->initInsertState(transaction, mm, isVisible);
+    if (!insertState) {
+        insertState = index->initInsertState(transaction, mm, isVisible);
+    }
     index->insert(transaction, nodeIDVector, {scannedVectors}, *insertState);
     startNodeOffset += scanResult.numRows;
     return true;

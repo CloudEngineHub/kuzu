@@ -269,10 +269,8 @@ static void finalizeHNSWTableFinalizeFunc(const ExecutionContext* context,
         bindData->tableEntry->getTableID(), bindData->indexName, std::vector{bindData->propertyID},
         std::move(auxInfo));
     catalog->createIndex(transaction, std::move(indexEntry));
-    auto nodeTable =
-        clientContext->getStorageManager()->getTable(nodeTableID)->ptrCast<storage::NodeTable>();
     auto columnID = bindData->tableEntry->getColumnID(bindData->propertyID);
-    auto hnswIndexType = OnDiskHNSWIndex::getIndexType();
+    const auto hnswIndexType = OnDiskHNSWIndex::getIndexType();
     storage::IndexInfo indexInfo{bindData->indexName, hnswIndexType.typeName, nodeTableID,
         {columnID}, {PhysicalTypeID::ARRAY},
         hnswIndexType.constraintType == storage::IndexConstraintType::PRIMARY,
@@ -283,6 +281,8 @@ static void finalizeHNSWTableFinalizeFunc(const ExecutionContext* context,
         std::move(storageInfo), bindData->tableEntry->ptrCast<catalog::NodeTableCatalogEntry>(),
         upperTable->ptrCast<catalog::RelGroupCatalogEntry>(),
         lowerTable->ptrCast<catalog::RelGroupCatalogEntry>(), bindData->config.copy());
+    auto nodeTable =
+        clientContext->getStorageManager()->getTable(nodeTableID)->ptrCast<storage::NodeTable>();
     nodeTable->addIndex(std::move(onDiskIndex));
 }
 
@@ -327,9 +327,9 @@ static std::string rewriteCreateHNSWQuery(main::ClientContext& context,
     auto indexName = hnswBindData->indexName;
     auto tableName = hnswBindData->tableEntry->getName();
     auto tableID = hnswBindData->tableEntry->getTableID();
-    query += stringFormat("CREATE REL TABLE {} (FROM {} TO {});",
+    query += stringFormat("CREATE REL TABLE {} (FROM {} TO {}) WITH (storage_direction='fwd');",
         HNSWIndexUtils::getUpperGraphTableName(tableID, indexName), tableName, tableName);
-    query += stringFormat("CREATE REL TABLE {} (FROM {} TO {});",
+    query += stringFormat("CREATE REL TABLE {} (FROM {} TO {}) WITH (storage_direction='fwd');",
         HNSWIndexUtils::getLowerGraphTableName(tableID, indexName), tableName, tableName);
     std::string params;
     auto& config = hnswBindData->config;
