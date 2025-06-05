@@ -1,7 +1,7 @@
 #include "common/exception/runtime.h"
 #include "function/table/bind_data.h"
 #include "function/table/standalone_call_function.h"
-#include "graph/graph_entry.h"
+#include "graph/graph_entry_set.h"
 #include "processor/execution_context.h"
 
 using namespace kuzu::common;
