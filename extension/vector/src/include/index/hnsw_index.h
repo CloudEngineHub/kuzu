@@ -109,6 +109,13 @@ public:
     }
     ~HNSWIndex() override = default;
 
+    void commitInsert(transaction::Transaction*, const common::ValueVector&,
+        const std::vector<common::ValueVector*>&, InsertState&) override {
+        // DO NOTHING.
+        // For HNSW index, insertions are handled when the new tuples are inserted into the base
+        // table being indexed.
+    }
+
     common::LogicalType getElementType() const { return typeInfo.getChildType().copy(); }
 
     static std::vector<NodeWithDistance> popTopK(max_node_priority_queue_t& result,
